@@ -11,11 +11,12 @@
 
 
 import math
+import collections
 
 
 class LinearPart(object):
     """
-    This class stores the linear part of an uncertain variable.
+    This helper class stores the linear part of an uncertain variable.
     
     It basicially maps from variables to the coefficient of their
     differential.
@@ -36,7 +37,7 @@ class LinearPart(object):
         underneath.
 
         linear_combination -- Can be either a dict or a list.
-        If it is a dict, it should represent an expandet linear combination
+        If it is a dict, it should represent an expanded linear combination
         and map underlying independet variables to the coefficient of their
         differential.
         If it is a list, it should contain (LinearPart, coefficient) pairs
@@ -46,11 +47,69 @@ class LinearPart(object):
         
         self._linear_combo = linear_combination
     
-    # TODO is_expanded(self):
+    def is_expanded(self):
+        """
+        Returns True if the linear combination is expanded, False otherwise.
+        """
+        return isinstance(self._linear_combo, dict)
     
-    # TODO expand(self):
+    def expand(self):
+        """
+        Expands the linear combination, converts a list to a dict.
+        
+        This method should only be called if the linear combination is not yet
+        expanded.
+        
+        The new linear combination will be a collections.defaultdict(float)
+        """
+        
+        # The list in self._linear_combo will be emptied and each element be
+        # used to build the derivatives. Expanded LinearParts are directly
+        # added to the factors, non expanded LinearParts will be appended
+        # and expanded here.
+        
+        # Alternative method: Call not expanded LinearParts recursively. This
+        # would need more space, but save time if several calculations are
+        # done with the same variables.
+        # This method is more efficient in large calculations with only one
+        # result, which is the more typically case. For example, large sums
+        # have linear runtime with this, quadratic runtime with the recursive
+        # method
+        
+        # new linear combination, start with an empty dict
+        new_linear_combo = collections.defaultdict(float)
+        
+        # disasseble the list
+        while self._linear_combo:
+            
+            # extract one list element
+            (main_factor, main_linear_part) = self._linear_combo.pop()
+            
+            if main_linear_part.is_expanded():
+                for (variable, factor) in main_linear_part._linear_combo.iteritems():
+                    
+                    # adjust derivative
+                    new_linear_combo[variable] += main_factor*factor
+            
+            else: # non expanded form
+                for (factor, linear_part) in main_linear_part._linear_combo:
+                    
+                    # add all elements with combined factor
+                    self._linear_combo.append((main_factor*factor, linear_part))
+            
+        self._linear_combo = new_linear_combo
     
-    # TODO get_linear_combo(self):
+    def get_linear_combo(self):
+        """
+        Expands the linear combo, if it not already is expanded.
+        
+        Returns the linear combo, a collections.defaultdict(float)
+        """
+        
+        if not self.is_expanded():
+            self.expand()
+        
+        return self._linear_combo
 
 
 class AffineApproximation(object):
@@ -87,7 +146,7 @@ class AffineApproximation(object):
         self._nominal_value = float(nominal_value)
         
         # The linear part will only be expanded if needed. This should
-        # make calculations faster.
+        # make calculations faster. See LinearPart for details.
         self._linear_part = linear_part
     
     @property

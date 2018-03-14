@@ -10,9 +10,16 @@
 # TODO how it works
 
 
-import math
 import collections
+import copy
+import math
 
+
+class NegativeStandardDeviation(Exception):
+    """
+    Raised if a negative standard deviation is given.
+    """
+    pass
 
 class LinearPart(object):
     """
@@ -72,7 +79,7 @@ class LinearPart(object):
         # would need more space, but save time if several calculations are
         # done with the same variables.
         # This method is more efficient in large calculations with only one
-        # result, which is the more typically case. For example, large sums
+        # result, which is the more typical case. For example, large sums
         # have linear runtime with this, quadratic runtime with the recursive
         # method
         
@@ -83,19 +90,19 @@ class LinearPart(object):
         while self._linear_combo:
             
             # extract one list element
-            (main_factor, main_linear_part) = self._linear_combo.pop()
+            (main_linear_part, main_factor) = self._linear_combo.pop()
             
             if main_linear_part.is_expanded():
-                for (variable, factor) in main_linear_part._linear_combo.iteritems():
+                for (variable, factor) in main_linear_part._linear_combo.items():
                     
                     # adjust derivative
                     new_linear_combo[variable] += main_factor*factor
             
             else: # non expanded form
-                for (factor, linear_part) in main_linear_part._linear_combo:
+                for (linear_part, factor) in main_linear_part._linear_combo:
                     
                     # add all elements with combined factor
-                    self._linear_combo.append((main_factor*factor, linear_part))
+                    self._linear_combo.append((linear_part, main_factor*factor))
             
         self._linear_combo = new_linear_combo
     
@@ -136,8 +143,8 @@ class AffineApproximation(object):
         nominal_value -- value of the approximation when the linear part
         is zero.
         
-        linear_part -- a LinearPart describing the linear approximation
-        of a calculation around the nominal value.
+        linear_part -- an instance of class LinearPart describing the linear
+        approximation of a calculation around the nominal value.
         """
         
         # Converting to a float.
@@ -159,26 +166,133 @@ class AffineApproximation(object):
     # Abbrevation to make formulars shorter
     n = nominal_value
     
-    # TODO def derivatives(self):
+    @property
+    def derivatives(self):
+        """
+        Return a map from variables to derivatives of this function to these
+        variables.
+        """
+        # Using a copy to ensure the map is not altered
+        return copy.copy(self._linear_part.get_linear_combo())
     
-    # TODO def error_components(self, type=None):
+    def uncertainty_components(self, kind="stat"):
+        """
+        Return a map from variables to the uncertainty of this object coming
+        from that variable. Depending on argument kind, you can either access
+        statistical or systematical uncertainty.
+        The variables will be the independent ones lying underneath.
+        
+        kind -- can be either "stat", which is default, or "sys"
+        """
+        # Direct acces, not using self.derivatives, as making a copy is not
+        # necessary here
+        derivatives = self._linear_part.get_linear_combo()
+        
+        uncertainty_components = {}
+        
+        if kind == "stat":
+            for (variable, derivative) in derivatives.items():
+                uncertainty_components[variable] = abs(derivative*variable.stat)
+            return uncertainty_components
+            
+        elif kind == "sys":
+            for (variable, derivative) in derivatives.items():
+                uncertainty_components[variable] = abs(derivative*variable.sys)
+            return uncertainty_components
+        
+        else:
+            raise ValueError()
     
-    # TODO @property def statistical_standard_deviation(self):
-    # stat_std_dev = statistical_standard_deviation
-    # stat = statistical_standard_deviation
     
-    # TODO @property def systematical_standard_deviation(self):
-    # sys_std_dev = statistical_standard_deviation
-    # sys = statistical_standard_deviation
+    @property
+    def statistical_standard_deviation(self):
+        """
+        Resulting statistical standard deviation.
+        """
+        
+        # Try returning a cached result
+        try:
+            return self._stat_std_dev
+        except AttributeError:
+            pass
+        
+        # Calculate the standart deviation from the uncertainty components and
+        # cache it
+        self._stat_std_dev = math.sqrt(sum(
+                d**2 for d in self.uncertainty_components("stat").values()))
+        
+        return self._stat_std_dev
     
-    # TODO significant_digits(self)
+    stat_std_dev = statistical_standard_deviation
     
-    # TODO __repr__, __str__, __format__
+    stat = statistical_standard_deviation
     
-    # TODO eq, neq, lt, gt, ...
+    @property
+    def systematical_standard_deviation(self):
+        """
+        Resulting systematical standard deviation
+        """
+        
+        # Try returning a cached result
+        try:
+            return self._sys_std_dev
+        except AttributeError:
+            pass
+        
+        # Calculate the standart deviation from the uncertainty components and
+        # cache it
+        self._sys_std_dev = math.sqrt(sum(
+                d**2 for d in self.uncertainty_components("sys").values()))
+        
+        return self._sys_std_dev
     
-    # TODO add, sub, mult, div, pow, ...
-
+    sys_std_dev = statistical_standard_deviation
+    
+    sys = systematical_standard_deviation
+    
+    def significant_digits(self):
+        """
+        Return the index of the last significant digit.
+        
+        According to our conventions, the digit with the same order of
+        magnitude as the greater uncertaincy and the next one are significant.
+        """
+        max_std_dev = max(self.stat, self.sys)
+        return int(math.floor(math.log10(abs(max_std_dev))))-2
+    
+    def __repr__(self): #TODO change?
+        return "%r +- %r(stat) +- %r(sys)" % (self.n, self.stat, self.sys)
+        
+    # TODO __str__, __format__, maybe __hash__
+    
+    def __add__(self, other):
+        # The derivatives to each argument are 1
+        linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, 1)])
+        nominal_value = self.nominal_value + other.nominal_value
+        return AffineApproximation(nominal_value, linear_part)
+    
+    def __sub__(self, other):
+        linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, -1)])
+        nominal_value = self.nominal_value - other.nominal_value
+        return AffineApproximation(nominal_value, linear_part)
+    
+    def __mul__(self, other):
+        linear_part = LinearPart([(self._linear_part, other.nominal_value),
+                                  (other._linear_part, self.nominal_value)])
+        nominal_value = self.nominal_value * other.nominal_value
+        return AffineApproximation(nominal_value, linear_part)
+    
+    def __truediv__(self, other):
+        linear_part = LinearPart([(self._linear_part, 1/other.nominal_value),
+                        (other._linear_part, -self.nominal_value/other.nominal_value**2)])
+        nominal_value = self.nominal_value / other.nominal_value
+        return AffineApproximation(nominal_value, linear_part)
+    
+    # TODO eq, ne, lt, gt, le, ge
+    
+    # TODO neg, pos, abs, int, float, round, floor, ceil, pow
+    
+    # TODO radd etc for all operators, nan_if_exception for some derivatives
 
 class UncertainVariable(AffineApproximation):
     """
@@ -190,7 +304,32 @@ class UncertainVariable(AffineApproximation):
     deviation.
     """
     
-    # TODO overwrite changed functions
+    __slots__ = ("_stat_std_dev", "_sys_std_dev")
+    
+    def __init__(self, nominal_value, statistic_uncertaincy=0,
+                 systematic_uncertaincy=0):
+        """
+        Initialise an independend variable.
+        
+        nominal_value -- nominal value, float-like
+        statistic_uncertainc -- statistic uncertaincy, float-like
+        systematic_uncertaincy -- systematic uncertaincy, float-like
+        """
+        # With this, calculations can be handled the same as with
+        # other AffineApproximations
+        linear_part = LinearPart({self: 1.})
+        super().__init__(nominal_value, linear_part)
+        
+        # Using not >= instead of < accepts NaN as uncertaincy, which is
+        # used if the uncertaincy could not be calculated
+        if not (statistic_uncertaincy >= 0 and systematic_uncertaincy >= 0):
+            raise NegativeStandardDeviation()
+        
+        self._stat_std_dev = statistic_uncertaincy
+        self._sys_std_dev = systematic_uncertaincy
+    
+    # as AffineApproximation caches the standard deviations, there is no need
+    # to overwrite any functions
 
 
 def to_uncertain_value(x):
@@ -244,6 +383,13 @@ def systematical_standart_deviation(x, default=0.0):
 # TODO def covariance_matrix(numbers)
 
 # TODO wrapper
+
+# Exported functions
+__all__ = [ "UncertainVariable", # creating an uncertain value
+            "nominal_value",
+            "statistical_standart_deviation",
+            "systematical_standart_deviation"
+          ]
 
 try:
     import numpy

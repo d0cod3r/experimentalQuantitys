@@ -9,17 +9,167 @@
 
 # TODO how it works
 
-
+import numbers
+import sys
+import itertools
 import collections
 import copy
 import math
 
 
-class NegativeStandardDeviation(Exception):
+# The amount of significant digits with the same or a smaller order of 
+# magnitude as the greatest uncertainty 
+SIGNIFICANT_DIGITS = 2
+
+FLOAT_LIKE_TYPES = [numbers.Number]
+
+# Step size for numeric differentiation
+try:
+    EPSILON = math.sqrt(sys.float_info.epsilon)
+except AttributeError:
+    EPSILON = 1e-8
+
+
+def partial_derivate(function, arg_index):
+    """
+    Partial derivative of a function with respect to the arg_index-th
+    argument.
+    
+    The derivative is calculated numerically as ( f(x+e) - f(x-e) ) / (2*e)
+    """
+    def partial_derivative(*args):
+        """
+        Numerically calculated partial derivative of %s.
+        """ % function.__name__
+        
+        # numerical step must be greater with greater arguments because of
+        # precision limits
+        epsilon = EPSILON*(abs(args[arg_index])+1)
+        
+        args = list(args)
+        
+        args[arg_index] += epsilon
+        f_shifted_pos = function(*args)
+        
+        args[arg_index] -= 2 * epsilon
+        f_shifted_neg = function(*args)
+        
+        return (f_shifted_pos - f_shifted_neg) /epsilon /2
+        
+    return partial_derivative
+
+class IndexableIterator(object):
+    """
+    Wrapper around an iterator to allow access it like a list. It caches the
+    results in a list and generates new ones if needed.
+    It is possible to give a function to convert None, if it appears in the
+    iterator.
+    """
+    
+    def __init__(self, iterator, none_converter=lambda i: None):
+        """
+        Initialise an IndexableIterator.
+        
+        iterator -- The iterable to wrap.
+        
+        none_converter -- Optional: A function that takes an index and is
+        called to replace None, if it is returned from the iterator. The defalt
+        converter does nothing.
+        """
+        self._iter = iterator
+        self._none_converter = none_converter
+        self._cache = []
+    
+    def __getitem__(self, index):
+        """
+        Acces the index-th element of the wrapped iterable.
+        """
+        while index >= len(self._cache):
+            next_element = next(self._iter)
+            if next_element is None:
+                next_element = self._none_converter(index)
+            self._cache.append(next_element)
+        return self._cache[index]
+
+
+class NegativeStandardDeviation(ValueError):
     """
     Raised if a negative standard deviation is given.
     """
     pass
+
+def to_affine_approximation(x):
+    """
+    If x is an AffineApproximation, return x.
+    Otherwise, wrap x as an AffineApproximation with uncertainty 0.
+    """
+    if isinstance(x,AffineApproximation):
+        return x
+    if isinstance(x, FLOAT_LIKE_TYPES):
+        # Return a AffineApproximation, not a Variable, as the uncertainty does
+        # not have to be saved, it is 0 by default
+        return AffineApproximation(x, LinearPart({}))
+    raise ValueError("Can not transform other than floatlike values to a"
+                     "constant AffineApproximation.")
+
+def wrap(function, derivatives=itertools.repeat(None)):
+    """
+    Wrap a function to also accept values with uncertainties and to return an
+    AffineApproximation.
+    WARNING: Keyword-arguments are not supported
+    
+    function -- The function to wrap
+    
+    derivatives -- If known, analytical derivatives can be given as an iterable.
+    The n-th elements must be the partial derivative of the function with
+    respect to the n-th argument and accept the same amount and types as
+    arguments as the original function.
+    If None occours, it will be replaced by a numerical derivative.
+    If the argument is a list, it must have the same length as the amount
+    of arguments given to the function.
+    """
+    if isinstance(derivatives, list):
+        # Replace None with numeric derivative
+        for (index, element) in enumerate(derivatives):
+            if element is None:
+                derivatives[index] = partial_derivate(function, index)
+    else: # case of every other iterable
+        none_converter = lambda i: partial_derivate(function, i)
+        derivatives = IndexableIterator(derivatives, none_converter)
+    
+    def wrapped_function(*args):
+        """
+        A wrapped version of %s to also accept uncertain values as arguments
+        and to return an uncertain value.
+        
+        Original documentation:
+        %s
+        """ % (function.__name__, function.__doc__) 
+        # Search uncertain inputs
+        pos_with_uncert = [index for (index, value) in enumerate(args) if
+                   isinstance(value, AffineApproximation)]
+        
+        # extract nominal values from uncertain arguments and use them to
+        # calculate the nomainal result
+        nominal_args = list(args)
+        for index in pos_with_uncert:
+            nominal_args[index] = args[index].nominal_value
+        nominal_result = function(*nominal_args)
+        
+        # build the linear part using the derivatives
+        linear_part = []
+        for index in pos_with_uncert:
+            linear_part.append((
+                    # get the LinearPart from the uncertain value
+                    args[index]._linear_part,
+                    # calculate the coefficient from the derivative
+                    derivatives[index](*nominal_args) ))
+        
+        return AffineApproximation(nominal_result, LinearPart(linear_part))
+    
+    wrapped_function.__name__ = function.__name__
+    
+    return wrapped_function
 
 class LinearPart(object):
     """
@@ -246,7 +396,7 @@ class AffineApproximation(object):
         
         return self._sys_std_dev
     
-    sys_std_dev = statistical_standard_deviation
+    sys_std_dev = systematical_standard_deviation
     
     sys = systematical_standard_deviation
     
@@ -254,11 +404,13 @@ class AffineApproximation(object):
         """
         Return the index of the last significant digit.
         
-        According to our conventions, the digit with the same order of
-        magnitude as the greater uncertaincy and the next one are significant.
+        
+        The convention of how many digits with the same or a smaller order of
+        magnitude as the greater uncertainty are relevant is set in the
+        constant SIGNIFICANT_DIGITS.
         """
         max_std_dev = max(self.stat, self.sys)
-        return int(math.floor(math.log10(abs(max_std_dev))))-2
+        return int(math.floor(math.log10(abs(max_std_dev))))-SIGNIFICANT_DIGITS
     
     def __repr__(self): #TODO change?
         return "%r +- %r(stat) +- %r(sys)" % (self.n, self.stat, self.sys)
@@ -266,9 +418,14 @@ class AffineApproximation(object):
     # TODO __str__, __format__, maybe __hash__
     
     def __add__(self, other):
-        # The derivatives to each argument are 1
-        linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, 1)])
-        nominal_value = self.nominal_value + other.nominal_value
+        if isinstance(other, AffineApproximation):
+            linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, 1)])
+            nominal_value = self.nominal_value + other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, 2)])
+            nominal_value = self.nominal_value + other
+        else:
+            return NotImplemented
         return AffineApproximation(nominal_value, linear_part)
     
     def __sub__(self, other):
@@ -306,27 +463,27 @@ class UncertainVariable(AffineApproximation):
     
     __slots__ = ("_stat_std_dev", "_sys_std_dev")
     
-    def __init__(self, nominal_value, statistic_uncertaincy=0,
-                 systematic_uncertaincy=0):
+    def __init__(self, nominal_value, statistic_uncertainty=0,
+                 systematic_uncertainty=0):
         """
         Initialise an independend variable.
         
         nominal_value -- nominal value, float-like
-        statistic_uncertainc -- statistic uncertaincy, float-like
-        systematic_uncertaincy -- systematic uncertaincy, float-like
+        statistic_uncertainc -- statistic uncertainty, float-like
+        systematic_uncertainty -- systematic uncertainty, float-like
         """
         # With this, calculations can be handled the same as with
         # other AffineApproximations
         linear_part = LinearPart({self: 1.})
         super().__init__(nominal_value, linear_part)
         
-        # Using not >= instead of < accepts NaN as uncertaincy, which is
-        # used if the uncertaincy could not be calculated
-        if not (statistic_uncertaincy >= 0 and systematic_uncertaincy >= 0):
+        # Using not >= instead of < accepts NaN as uncertainty, which is
+        # used if the uncertainty could not be calculated
+        if not (statistic_uncertainty >= 0 and systematic_uncertainty >= 0):
             raise NegativeStandardDeviation()
         
-        self._stat_std_dev = statistic_uncertaincy
-        self._sys_std_dev = systematic_uncertaincy
+        self._stat_std_dev = statistic_uncertainty
+        self._sys_std_dev = systematic_uncertainty
     
     # as AffineApproximation caches the standard deviations, there is no need
     # to overwrite any functions
@@ -342,7 +499,7 @@ def nominal_value(x):
     Otherwise it returns x unchanged.
 
     This can be usefull to groups of numbers, where only some have
-    an uncertaincy while others are just floats.
+    an uncertainty while others are just floats.
     """
 
     if isinstance(x, AffineApproximation):
@@ -357,7 +514,7 @@ def statistical_standart_deviation(x, default=0.0):
     Otherwise it will return default, which is default to 0.
 
     This can be usefull to groups of numbers, where only some have
-    an uncertaincy while others are just floats.
+    an uncertainty while others are just floats.
     """
 
     if isinstance(x, AffineApproximation):
@@ -372,7 +529,7 @@ def systematical_standart_deviation(x, default=0.0):
     Otherwise it will return default, which is default to 0.
 
     This can be usefull to groups of numbers, where only some have
-    an uncertaincy while others are just floats.
+    an uncertainty while others are just floats.
     """
 
     if isinstance(x, AffineApproximation):
@@ -408,8 +565,8 @@ else:
         
         #TODO as below
         # diagonalise both
-        # create independent variables holding the statistic uncertaincy
-        #   and ones holding the systematic uncertaincy
+        # create independent variables holding the statistic uncertainty
+        #   and ones holding the systematic uncertainty
         # recreate the original variables as AffineApproximations to both
         #   groups of independent variables
     

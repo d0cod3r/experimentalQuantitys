@@ -21,10 +21,11 @@ import math
 # magnitude as the greatest uncertainty 
 SIGNIFICANT_DIGITS = 2
 
-FLOAT_LIKE_TYPES = [numbers.Number]
+FLOAT_LIKE_TYPES = (numbers.Number,)
 
 # Step size for numeric differentiation
 try:
+    # should give good results in most cases
     EPSILON = math.sqrt(sys.float_info.epsilon)
 except AttributeError:
     EPSILON = 1e-8
@@ -60,8 +61,8 @@ def partial_derivate(function, arg_index):
 
 class IndexableIterator(object):
     """
-    Wrapper around an iterator to allow access it like a list. It caches the
-    results in a list and generates new ones if needed.
+    Wrapper around an iterator that allows to access it like a list. It caches
+    the results in a list and generates new ones if needed.
     It is possible to give a function to convert None, if it appears in the
     iterator.
     """
@@ -101,7 +102,7 @@ class NegativeStandardDeviation(ValueError):
 def to_affine_approximation(x):
     """
     If x is an AffineApproximation, return x.
-    Otherwise, wrap x as an AffineApproximation with uncertainty 0.
+    Otherwise, attempt to wrap x as an AffineApproximation with uncertainty 0.
     """
     if isinstance(x,AffineApproximation):
         return x
@@ -114,14 +115,22 @@ def to_affine_approximation(x):
 
 def wrap(function, derivatives=itertools.repeat(None)):
     """
-    Wrap a function to also accept values with uncertainties and to return an
-    AffineApproximation.
+    Build a wrapper around a function. The new function will accept uncertain
+    values as well as other types and return an uncertain variable with the
+    right uncertainties and correlations.
+    It can therefor be used in the same way as the orgininal function, only
+    with some arguments being uncertain numbers instead of floats.
+    
     WARNING: Keyword-arguments are not supported
+    
+    The function must return a value that can be converted to float.
+    
+    
     
     function -- The function to wrap
     
     derivatives -- If known, analytical derivatives can be given as an iterable.
-    The n-th elements must be the partial derivative of the function with
+    The n-th element must be the partial derivative of the function with
     respect to the n-th argument and accept the same amount and types as
     arguments as the original function.
     If None occours, it will be replaced by a numerical derivative.
@@ -148,7 +157,7 @@ def wrap(function, derivatives=itertools.repeat(None)):
         # Search uncertain inputs
         pos_with_uncert = [index for (index, value) in enumerate(args) if
                    isinstance(value, AffineApproximation)]
-        
+
         # extract nominal values from uncertain arguments and use them to
         # calculate the nomainal result
         nominal_args = list(args)
@@ -284,7 +293,7 @@ class AffineApproximation(object):
     """
     
     # faster acces and less storage consumption
-    slots = ("_nominal_value", "_linear_part")
+    __slots__ = ("_nominal_value", "_linear_part")
     
     def __init__(self, nominal_value, linear_part):
         """
@@ -342,12 +351,22 @@ class AffineApproximation(object):
         
         if kind == "stat":
             for (variable, derivative) in derivatives.items():
-                uncertainty_components[variable] = abs(derivative*variable.stat)
+                uncert = variable.stat_std_dev
+                # derivative can be nan if uncertainty is 0
+                if uncert == 0:
+                    uncertainty_components[variable] = 0
+                else:
+                    uncertainty_components[variable] = abs(derivative*uncert)
             return uncertainty_components
             
         elif kind == "sys":
             for (variable, derivative) in derivatives.items():
-                uncertainty_components[variable] = abs(derivative*variable.sys)
+                uncert = variable.sys_std_dev
+                # derivative can be nan if uncertainty is 0
+                if uncert == 0:
+                    uncertainty_components[variable] = 0
+                else:
+                    uncertainty_components[variable] = abs(derivative*uncert)
             return uncertainty_components
         
         else:
@@ -359,19 +378,10 @@ class AffineApproximation(object):
         """
         Resulting statistical standard deviation.
         """
-        
-        # Try returning a cached result
-        try:
-            return self._stat_std_dev
-        except AttributeError:
-            pass
-        
-        # Calculate the standart deviation from the uncertainty components and
-        # cache it
-        self._stat_std_dev = math.sqrt(sum(
+        stat_std_dev = math.sqrt(sum(
                 d**2 for d in self.uncertainty_components("stat").values()))
         
-        return self._stat_std_dev
+        return stat_std_dev
     
     stat_std_dev = statistical_standard_deviation
     
@@ -382,19 +392,10 @@ class AffineApproximation(object):
         """
         Resulting systematical standard deviation
         """
-        
-        # Try returning a cached result
-        try:
-            return self._sys_std_dev
-        except AttributeError:
-            pass
-        
-        # Calculate the standart deviation from the uncertainty components and
-        # cache it
-        self._sys_std_dev = math.sqrt(sum(
+        sys_std_dev = math.sqrt(sum(
                 d**2 for d in self.uncertainty_components("sys").values()))
         
-        return self._sys_std_dev
+        return sys_std_dev
     
     sys_std_dev = systematical_standard_deviation
     
@@ -409,47 +410,154 @@ class AffineApproximation(object):
         magnitude as the greater uncertainty are relevant is set in the
         constant SIGNIFICANT_DIGITS.
         """
-        max_std_dev = max(self.stat, self.sys)
+        max_std_dev = max(self.stat_std_dev, self.sys_std_dev)
         return int(math.floor(math.log10(abs(max_std_dev))))-SIGNIFICANT_DIGITS
     
-    def __repr__(self): #TODO change?
+    def __repr__(self):
+        #TODO only give significant digits (or dont?)
         return "%r +- %r(stat) +- %r(sys)" % (self.n, self.stat, self.sys)
         
-    # TODO __str__, __format__, maybe __hash__
+    # TODO __str__, __format__
     
     def __add__(self, other):
         if isinstance(other, AffineApproximation):
             linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, 1)])
             nominal_value = self.nominal_value + other.nominal_value
         elif isinstance(other, FLOAT_LIKE_TYPES):
-            linear_part = LinearPart([(self._linear_part, 2)])
+            linear_part = LinearPart([(self._linear_part, 1)])
             nominal_value = self.nominal_value + other
         else:
             return NotImplemented
         return AffineApproximation(nominal_value, linear_part)
     
     def __sub__(self, other):
-        linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, -1)])
-        nominal_value = self.nominal_value - other.nominal_value
+        if isinstance(other, AffineApproximation):
+            linear_part = LinearPart([(self._linear_part, 1), (other._linear_part, -1)])
+            nominal_value = self.nominal_value - other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, 1)])
+            nominal_value = self.nominal_value - other
+        else:
+            return NotImplemented
         return AffineApproximation(nominal_value, linear_part)
     
     def __mul__(self, other):
-        linear_part = LinearPart([(self._linear_part, other.nominal_value),
+        if isinstance(other, AffineApproximation):
+            linear_part = LinearPart([(self._linear_part, other.nominal_value),
                                   (other._linear_part, self.nominal_value)])
-        nominal_value = self.nominal_value * other.nominal_value
+            nominal_value = self.nominal_value * other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, other)])
+            nominal_value = self.nominal_value * other
+        else:
+            return NotImplemented
         return AffineApproximation(nominal_value, linear_part)
     
     def __truediv__(self, other):
-        linear_part = LinearPart([(self._linear_part, 1/other.nominal_value),
+        if isinstance(other, AffineApproximation):
+            linear_part = LinearPart([(self._linear_part, 1/other.nominal_value),
                         (other._linear_part, -self.nominal_value/other.nominal_value**2)])
-        nominal_value = self.nominal_value / other.nominal_value
+            nominal_value = self.nominal_value / other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, 1/other)])
+            nominal_value = self.nominal_value / other
+        else:
+            return NotImplemented
         return AffineApproximation(nominal_value, linear_part)
     
-    # TODO eq, ne, lt, gt, le, ge
+    # The reflected operators are only called if the left operand is not an
+    # AffineApproximation
     
-    # TODO neg, pos, abs, int, float, round, floor, ceil, pow
+    def __radd__(self, other):
+        if isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, 1)])
+            nominal_value = self.nominal_value + other
+            return AffineApproximation(nominal_value, linear_part)
+        else:
+            return NotImplemented
     
-    # TODO radd etc for all operators, nan_if_exception for some derivatives
+    def __rsub__(self, other):
+        if isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, -1)])
+            nominal_value = other - self.nominal_value
+        else:
+            return NotImplemented
+        return AffineApproximation(nominal_value, linear_part)
+    
+    def __rmul__(self, other):
+        if isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, other)])
+            nominal_value = self.nominal_value * other
+            return AffineApproximation(nominal_value, linear_part)
+        else:
+            return NotImplemented
+    
+    def __rtruediv__(self, other):
+        if isinstance(other, FLOAT_LIKE_TYPES):
+            linear_part = LinearPart([(self._linear_part, -other/self.nominal_value**2)])
+            nominal_value = other / self.nominal_value
+            return AffineApproximation(nominal_value, linear_part)
+        else:
+            return NotImplemented
+    
+    def __pos__(self):
+        return self
+    
+    def __neg__(self):
+        return self * (-1)
+    
+    def __ne__(self, other):
+        # only a difference of excactly zero, without uncertainty, is considered
+        # equal
+        d = self - other
+        return (d.nominal_value or d.stat_std_dev or d.sys_std_dev)
+    
+    def __eq__(self, other):
+        return not self.__ne__(other)
+    
+    def __lt__(self, other):
+        if isinstance(other, AffineApproximation):
+            return self.nominal_value < other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            return self.nominal_value < other
+        else:
+            return NotImplemented
+    
+    def __le__(self, other):
+        if isinstance(other, AffineApproximation):
+            return self.nominal_value <= other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            return self.nominal_value <= other
+        else:
+            return NotImplemented
+    
+    def __gt__(self, other):
+        if isinstance(other, AffineApproximation):
+            return self.nominal_value > other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            return self.nominal_value > other
+        else:
+            return NotImplemented
+    
+    def __ge__(self, other):
+        if isinstance(other, AffineApproximation):
+            return self.nominal_value >= other.nominal_value
+        elif isinstance(other, FLOAT_LIKE_TYPES):
+            return self.nominal_value >= other
+        else:
+            return NotImplemented
+    
+    def __nonzero__(self):
+        # TODO why
+        return self != 0
+    
+    def __abs__(self):
+        if self >= 0:
+            return self
+        else:
+            return -self
+    
+    # TODO int, float, round, floor, ceil, pow
 
 class UncertainVariable(AffineApproximation):
     """
@@ -485,12 +593,31 @@ class UncertainVariable(AffineApproximation):
         self._stat_std_dev = statistic_uncertainty
         self._sys_std_dev = systematic_uncertainty
     
-    # as AffineApproximation caches the standard deviations, there is no need
-    # to overwrite any functions
+    def __hash__(self):
+        return id(self)
+    
+    @property
+    def statistical_standard_deviation(self):
+        """
+        Resulting statistical standard deviation.
+        """
+        return self._stat_std_dev
+    
+    stat_std_dev = statistical_standard_deviation
+    
+    stat = statistical_standard_deviation
+    
+    @property
+    def systematical_standard_deviation(self):
+        """
+        Resulting systematical standard deviation
+        """
+        return self._sys_std_dev
+    
+    sys_std_dev = systematical_standard_deviation
+    
+    sys = systematical_standard_deviation
 
-
-def to_uncertain_value(x):
-    pass # TODO
 
 def nominal_value(x):
     """
@@ -539,10 +666,8 @@ def systematical_standart_deviation(x, default=0.0):
 
 # TODO def covariance_matrix(numbers)
 
-# TODO wrapper
-
 # Exported functions
-__all__ = [ "UncertainVariable", # creating an uncertain value
+__all__ = [ "UncertainVariable",
             "nominal_value",
             "statistical_standart_deviation",
             "systematical_standart_deviation"
@@ -571,6 +696,3 @@ else:
         #   groups of independent variables
     
     # TODO other numpy depencies
-
-
-# TODO wrap external functions

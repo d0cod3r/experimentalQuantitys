@@ -9,24 +9,24 @@
 
 # TODO how it works
 
-import numbers
-import sys
-import itertools
-import collections
-import copy
-import math
+from numbers import Number
+from sys import float_info
+from itertools import repeat
+from collections import defaultdict
+from math import sqrt, floor, log10
+from types import MappingProxyType
 
 
 # The amount of significant digits with the same or a smaller order of 
 # magnitude as the greatest uncertainty 
 SIGNIFICANT_DIGITS = 2
 
-FLOAT_LIKE_TYPES = (numbers.Number,)
+FLOAT_LIKE_TYPES = (Number,)
 
 # Step size for numeric differentiation
 try:
     # should give good results in most cases
-    EPSILON = math.sqrt(sys.float_info.epsilon)
+    EPSILON = sqrt(float_info.epsilon)
 except AttributeError:
     EPSILON = 1e-8
 
@@ -113,7 +113,9 @@ def to_affine_approximation(x):
     raise ValueError("Can not transform other than floatlike values to a"
                      "constant AffineApproximation.")
 
-def wrap(function, derivatives=itertools.repeat(None)):
+def wrap(function, derivatives=repeat(None)):
+    # using itertools.repeat to generate numeric derivatives for any amount of
+    # arguments
     """
     Build a wrapper around a function. The new function will accept uncertain
     values as well as other types and return an uncertain variable with the
@@ -243,7 +245,7 @@ class LinearPart(object):
         # method
         
         # new linear combination, start with an empty dict
-        new_linear_combo = collections.defaultdict(float)
+        new_linear_combo = defaultdict(float)
         
         # disasseble the list
         while self._linear_combo:
@@ -331,8 +333,8 @@ class AffineApproximation(object):
         Return a map from variables to derivatives of this function to these
         variables.
         """
-        # Using a copy to ensure the map is not altered
-        return copy.copy(self._linear_part.get_linear_combo())
+        # Using types.MappingProxyType to give a readonly view
+        return MappingProxyType( self._linear_part.get_linear_combo() )
     
     def uncertainty_components(self, kind="stat"):
         """
@@ -343,9 +345,7 @@ class AffineApproximation(object):
         
         kind -- can be either "stat", which is default, or "sys"
         """
-        # Direct acces, not using self.derivatives, as making a copy is not
-        # necessary here
-        derivatives = self._linear_part.get_linear_combo()
+        derivatives = self.derivatives
         
         uncertainty_components = {}
         
@@ -370,7 +370,7 @@ class AffineApproximation(object):
             return uncertainty_components
         
         else:
-            raise ValueError()
+            raise ValueError("kind has to be stat or sys")
     
     
     @property
@@ -378,7 +378,7 @@ class AffineApproximation(object):
         """
         Resulting statistical standard deviation.
         """
-        stat_std_dev = math.sqrt(sum(
+        stat_std_dev = sqrt(sum(
                 d**2 for d in self.uncertainty_components("stat").values()))
         
         return stat_std_dev
@@ -392,7 +392,7 @@ class AffineApproximation(object):
         """
         Resulting systematical standard deviation
         """
-        sys_std_dev = math.sqrt(sum(
+        sys_std_dev = sqrt(sum(
                 d**2 for d in self.uncertainty_components("sys").values()))
         
         return sys_std_dev
@@ -411,11 +411,11 @@ class AffineApproximation(object):
         constant SIGNIFICANT_DIGITS.
         """
         max_std_dev = max(self.stat_std_dev, self.sys_std_dev)
-        return int(math.floor(math.log10(abs(max_std_dev))))-SIGNIFICANT_DIGITS
+        return int(floor(log10(abs(max_std_dev))))-SIGNIFICANT_DIGITS
     
     def __repr__(self):
         #TODO only give significant digits (or dont?)
-        return "%r +- %r(stat) +- %r(sys)" % (self.n, self.stat, self.sys)
+        return "%r+-%r(stat)+-%r(sys)" % (self.n, self.stat, self.sys)
         
     # TODO __str__, __format__
     
@@ -466,7 +466,7 @@ class AffineApproximation(object):
         return AffineApproximation(nominal_value, linear_part)
     
     # The reflected operators are only called if the left operand is not an
-    # AffineApproximation
+    # AffineApproximation, so there is no need to consider this case
     
     def __radd__(self, other):
         if isinstance(other, FLOAT_LIKE_TYPES):
@@ -504,7 +504,7 @@ class AffineApproximation(object):
         return self
     
     def __neg__(self):
-        return self * (-1)
+        return self * (-1) # Using __mul__
     
     def __ne__(self, other):
         # only a difference of excactly zero, without uncertainty, is considered
@@ -547,15 +547,15 @@ class AffineApproximation(object):
         else:
             return NotImplemented
     
-    def __nonzero__(self):
-        # TODO why
-        return self != 0
-    
     def __abs__(self):
         if self >= 0:
             return self
         else:
-            return -self
+            return -self # using __neg__
+    
+    def __bool__(self):
+        # Everything except exactly zero is considered True
+        return self != 0 # using __ne__
     
     # TODO int, float, round, floor, ceil, pow
 
@@ -590,8 +590,8 @@ class UncertainVariable(AffineApproximation):
         if not (statistic_uncertainty >= 0 and systematic_uncertainty >= 0):
             raise NegativeStandardDeviation()
         
-        self._stat_std_dev = statistic_uncertainty
-        self._sys_std_dev = systematic_uncertainty
+        self._stat_std_dev = float(statistic_uncertainty)
+        self._sys_std_dev = float(systematic_uncertainty)
     
     def __hash__(self):
         return id(self)
@@ -634,7 +634,7 @@ def nominal_value(x):
     else:
         return x
 
-def statistical_standart_deviation(x, default=0.0):
+def statistical_standard_deviation(x, default=0.0):
     """
     Return the statistical standard deviation of x if it is an uncertain
     value as defined in this module.
@@ -649,7 +649,7 @@ def statistical_standart_deviation(x, default=0.0):
     else:
         return default
 
-def systematical_standart_deviation(x, default=0.0):
+def systematical_standard_deviation(x, default=0.0):
     """
     Return the systematical standard deviation of x if it is an uncertain
     value as defined in this module.
@@ -664,13 +664,77 @@ def systematical_standart_deviation(x, default=0.0):
     else:
         return default
 
-# TODO def covariance_matrix(numbers)
+def covariance_matrix(numbers, kind="stat"):
+    """
+    Calculate a matrix of covariances to a vektor of uncertain values.
+    The order of the matrix depends on the order of the elements in the vector,
+    covariance_matrix[i][j] is the covariance of numbers[i] and numbers[j].
+    Returns a list of lists.
+    
+    numbers -- A list of uncertain values
+    
+    kind -- Can be either "stat" (default) or "sys" to determine which
+    kind of uncertainty is looked at.
+    """
+    if kind=="stat":
+        uncert = lambda var: var.stat_std_dev
+    elif kind=="sys":
+        uncert = lambda var: var.sys_std_dev
+    else:
+        raise ValueError("kind has to be stat or sys")
+    
+    # build the left under part of the matrix
+    covariance_matrix = []
+    for (i, number1) in enumerate(numbers):
+        derivatives1 = number1.derivatives
+        vars1 = derivatives1.keys()
+        matrix_line = []
+        for number2 in numbers[:i+1]:
+            derivatives2 = number2.derivatives
+            # using dict.get to define 0 as default, as number2 may not depend
+            # on var.
+            matrix_line.append(sum(
+                    ((derivatives1[var]*derivatives2.get(var,0.)*uncert(var)**2)
+                    for var in vars1))
+                    # All elements shold be floats by convention, so add .0
+                     + .0)
+        covariance_matrix.append(matrix_line)
+    
+    # make the matrix symmetric
+    size = len(numbers)
+    for i in range(size-1):
+        for j in range(i+1, size):
+            covariance_matrix[i].append(covariance_matrix[j][i])
+    
+    return covariance_matrix
+            
+def correlation_matrix(numbers, kind="stat"):
+    """
+    Calculate a matrix of correlations to a vektor of uncertain values.
+    The order of the matrix depends on the order of the elements in the vector,
+    correlation_matrix[i][j] is the correlation of numbers[i] and numbers[j].
+    Returns a list of lists.
+    
+    numbers -- A list of uncertain values
+    
+    kind -- Can be either "stat" (default) or "sys" to determine which
+    kind of uncertainty is looked at.
+    """
+    size = len(numbers)
+    matrix = covariance_matrix(numbers, kind)
+    variances = [matrix[i][i] for i in range(size)]
+    for i in range(size):
+        for j in range(size):
+            matrix[i][j] /= sqrt(variances[i]*variances[j])
+    return matrix
 
 # Exported functions
 __all__ = [ "UncertainVariable",
             "nominal_value",
-            "statistical_standart_deviation",
-            "systematical_standart_deviation"
+            "statistical_standard_deviation",
+            "systematical_standard_deviation",
+            "covariance_matrix",
+            "correlation_matrix"
           ]
 
 try:
@@ -679,14 +743,11 @@ except ImportError:
     pass
 else:
     
-    def correlated_values(nominal_values, statistic_covariances, \
-                          systematic_covariances, tag=None):
+    def correlated_values(nominal_values, statistic_covariances,
+                          systematic_covariances):
         """
         
         """
-        
-        if tag is None:
-            tag = [None for i in nominal_values]
         
         #TODO as below
         # diagonalise both
@@ -696,3 +757,5 @@ else:
         #   groups of independent variables
     
     # TODO other numpy depencies
+    
+    __all__.append("correlated_values")

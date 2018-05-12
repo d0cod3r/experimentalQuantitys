@@ -13,9 +13,11 @@ from numbers import Number
 from sys import float_info
 from itertools import repeat
 from collections import defaultdict
-from math import sqrt, floor, log10
+from math import sqrt, floor, log, log10
 from types import MappingProxyType
 
+
+NOT_DIFFERENTIALBE = float("nan")
 
 # The amount of significant digits with the same or a smaller order of 
 # magnitude as the greatest uncertainty 
@@ -58,6 +60,31 @@ def partial_derivate(function, arg_index):
         return (f_shifted_pos - f_shifted_neg) /epsilon /2
         
     return partial_derivative
+
+
+# Define derivatives of x**y.
+# The function is not defined if x<0 and y%1 != 0 or if x=0 and y<0
+
+def pow_derivative_0(x, y):
+    # derivative of x**y with respect to x. Not differentiabe in x=0, except
+    # if y%1=0
+    # Test y==0 first, as this is differentiable even in x=0
+    if y==0:
+        return 0.
+    elif x != 0 or y%1==0:
+        return y*x**(y-1)
+    else:
+        return NOT_DIFFERENTIALBE
+
+def pow_derivative_1(x, y):
+    # derivative of x**y with respect to y.
+    if x==0 and y>0:
+        return 0.
+    elif x>0:
+        return log(x)*x**y
+    else: # cases x<0 and (x,y)=(0,0)
+        return NOT_DIFFERENTIALBE
+
 
 class IndexableIterator(object):
     """
@@ -128,7 +155,6 @@ def wrap(function, derivatives=repeat(None)):
     The function must return a value that can be converted to float.
     
     
-    
     function -- The function to wrap
     
     derivatives -- If known, analytical derivatives can be given as an iterable.
@@ -162,6 +188,8 @@ def wrap(function, derivatives=repeat(None)):
 
         # extract nominal values from uncertain arguments and use them to
         # calculate the nomainal result
+        # must be done first, so in case of an error the exception is raised
+        # by calculating the nominal value, not the derivatives
         nominal_args = list(args)
         for index in pos_with_uncert:
             nominal_args[index] = args[index].nominal_value
@@ -239,10 +267,10 @@ class LinearPart(object):
         # Alternative method: Call not expanded LinearParts recursively. This
         # would need more space, but save time if several calculations are
         # done with the same variables.
-        # This method is more efficient in large calculations with only one
-        # result, which is the more typical case. For example, large sums
-        # have linear runtime with this, quadratic runtime with the recursive
-        # method
+        # The here used method is more efficient in large calculations with
+        # only one result, which is the more typical case. For example, large
+        # sums have linear runtime with this, quadratic runtime with the
+        # recursive method
         
         # new linear combination, start with an empty dict
         new_linear_combo = defaultdict(float)
@@ -548,7 +576,7 @@ class AffineApproximation(object):
             return NotImplemented
     
     def __abs__(self):
-        if self >= 0:
+        if self >= 0: # using __ge__
             return self
         else:
             return -self # using __neg__
@@ -557,7 +585,17 @@ class AffineApproximation(object):
         # Everything except exactly zero is considered True
         return self != 0 # using __ne__
     
-    # TODO int, float, round, floor, ceil, pow
+    def __float__(self):
+        return self.nominal_value
+    
+    def __int__(self):
+        return int(float(self)) # using __float__
+    
+    # TODO round, floor, ceil,
+    
+    __pow__ = wrap(lambda x,y: x**y, [pow_derivative_0, pow_derivative_1])
+    __rpow__ = wrap(lambda x,y: y**x, [lambda x,y: pow_derivative_1(y,x),
+                                       lambda x,y: pow_derivative_0(y,x)])
 
 class UncertainVariable(AffineApproximation):
     """
@@ -585,7 +623,7 @@ class UncertainVariable(AffineApproximation):
         linear_part = LinearPart({self: 1.})
         super().__init__(nominal_value, linear_part)
         
-        # Using not >= instead of < accepts NaN as uncertainty, which is
+        # Using not >= instead of < accepts nan as uncertainty, which is
         # used if the uncertainty could not be calculated
         if not (statistic_uncertainty >= 0 and systematic_uncertainty >= 0):
             raise NegativeStandardDeviation()
@@ -666,7 +704,7 @@ def systematical_standard_deviation(x, default=0.0):
 
 def covariance_matrix(numbers, kind="stat"):
     """
-    Calculate a matrix of covariances to a vektor of uncertain values.
+    Calculate a matrix of covariances to a vector of uncertain values.
     The order of the matrix depends on the order of the elements in the vector,
     covariance_matrix[i][j] is the covariance of numbers[i] and numbers[j].
     Returns a list of lists.
@@ -710,7 +748,7 @@ def covariance_matrix(numbers, kind="stat"):
             
 def correlation_matrix(numbers, kind="stat"):
     """
-    Calculate a matrix of correlations to a vektor of uncertain values.
+    Calculate a matrix of correlations to a vector of uncertain values.
     The order of the matrix depends on the order of the elements in the vector,
     correlation_matrix[i][j] is the correlation of numbers[i] and numbers[j].
     Returns a list of lists.
@@ -722,6 +760,7 @@ def correlation_matrix(numbers, kind="stat"):
     """
     size = len(numbers)
     matrix = covariance_matrix(numbers, kind)
+    # copy variances, as the matrix is altered
     variances = [matrix[i][i] for i in range(size)]
     for i in range(size):
         for j in range(size):
@@ -739,22 +778,72 @@ __all__ = [ "UncertainVariable",
 
 try:
     import numpy
+    import numpy.matlib
 except ImportError:
     pass
 else:
     
-    def correlated_values(nominal_values, statistic_covariances,
-                          systematic_covariances):
+    # numpy brings more types of numbers
+    FLOAT_LIKE_TYPES += (numpy.number,)
+    
+    def correlated_values(nominal_values, statistic_covariances=0,
+                          systematic_covariances=0):
+        """
+        To given covariance matrices and nominal values, create uncertain
+        variables that satisfy these relations.
+        Returns a list of uncertain variables, so that the covariance of
+        variables[i] and variables[j] is covariances[i,j]
+        
+        nominal_values -- A list of nominal values for the created variables
+        
+        statistic_covariances -- The statistic covariance matrix of the values
+        to create. Can be either a sqare matrix with the same lenght as
+        nominal_values in both dimensions, or a scalar. In the second case, the
+        covariance between any two created variables will be the given value.
+        Default to 0.
+        
+        systematic_covariances -- The systematic covariance matrix of the
+        values to create. Can be either a sqare matrix with the same lenght as
+        nominal_values in both dimensions, or a scalar. In the second case, the
+        covariance between any two created variables will be the given value.
+        Default to 0.
         """
         
-        """
+        # The idea of this method is to do a change of basis. The covariance
+        # matrices are diagonalised and the inital basis is expressed as a
+        # linear combination of the eigenvectors. As the eigenvectors are
+        # uncorrelated, they can be represented by an UncertainVariable.
         
-        #TODO as below
-        # diagonalise both
-        # create independent variables holding the statistic uncertainty
-        #   and ones holding the systematic uncertainty
-        # recreate the original variables as AffineApproximations to both
-        #   groups of independent variables
+        # if a scalar is given, create a matrix
+        size = len(nominal_values)
+        if isinstance(statistic_covariances, FLOAT_LIKE_TYPES):
+            statistic_covariances = [[statistic_covariances]*size]*size
+        if isinstance(systematic_covariances, FLOAT_LIKE_TYPES):
+            systematic_covariances = [[systematic_covariances]*size]*size
+        
+        # diagonalize the covariance matrix to get independent variables
+        variances, vectors1 = numpy.linalg.eigh(statistic_covariances)
+        
+        # some uncertainties might be calculated negative due to numertic
+        # errors. Setting them to 0 gives close and useful results
+        variances[variances < 0] = 0.
+        
+        # indepentend variables
+        variables1 = [UncertainVariable(0, sqrt(var), 0) for var in variances]
+        
+        # same for systematic uncertainties
+        variances, vectors2 = numpy.linalg.eigh(systematic_covariances)
+        variances[variances < 0] = 0.
+        variables2 = [UncertainVariable(0, 0, sqrt(var)) for var in variances]
+        
+        # recreate requested variables from independent variables
+        values = []
+        for n, coefs1, coefs2 in zip(nominal_values, vectors1, vectors2):
+            linear_part = dict(zip(variables1, coefs1))
+            linear_part.update(dict(zip(variables2, coefs2)))
+            values.append(AffineApproximation(n, LinearPart(linear_part)))
+        
+        return values
     
     # TODO other numpy depencies
     

@@ -373,42 +373,47 @@ class AffineApproximation(object):
         # Using types.MappingProxyType to give a readonly view
         return MappingProxyType( self._linear_part.get_linear_combo() )
     
-    def uncertainty_components(self, kind="stat"):
+    def statistical_uncertainty_components(self):
         """
-        Return a map from variables to the uncertainty of this object coming
-        from that variable. Depending on argument kind, you can either access
-        statistical or systematical uncertainty.
+        Return a map from variables to the statistical uncertainty of this
+        object coming from that variable. 
         The variables will be the independent ones lying underneath.
-        
-        kind -- can be either "stat", which is default, or "sys"
         """
         derivatives = self.derivatives
         
         uncertainty_components = {}
         
-        if kind == "stat":
-            for (variable, derivative) in derivatives.items():
-                uncert = variable.stat_std_dev
-                # derivative can be nan if uncertainty is 0
-                if uncert == 0:
-                    uncertainty_components[variable] = 0
-                else:
-                    uncertainty_components[variable] = abs(derivative*uncert)
-            return uncertainty_components
-            
-        elif kind == "sys":
-            for (variable, derivative) in derivatives.items():
-                uncert = variable.sys_std_dev
-                # derivative can be nan if uncertainty is 0
-                if uncert == 0:
-                    uncertainty_components[variable] = 0
-                else:
-                    uncertainty_components[variable] = abs(derivative*uncert)
-            return uncertainty_components
-        
-        else:
-            raise ValueError("kind has to be stat or sys")
+        for (variable, derivative) in derivatives.items():
+            uncert = variable.stat_std_dev
+            # derivative can be nan if uncertainty is 0
+            if uncert == 0:
+                uncertainty_components[variable] = 0
+            else:
+                uncertainty_components[variable] = abs(derivative*uncert)
+        return uncertainty_components
     
+    stat_components = statistical_uncertainty_components
+    
+    def systematic_uncertainty_components(self):
+        """
+        Return a map from variables to the systematic uncertainty of this
+        object coming from that variable. 
+        The variables will be the independent ones lying underneath.
+        """
+        derivatives = self.derivatives
+        
+        uncertainty_components = {}
+        
+        for (variable, derivative) in derivatives.items():
+            uncert = variable.sys_std_dev
+            # derivative can be nan if uncertainty is 0
+            if uncert == 0:
+                uncertainty_components[variable] = 0
+            else:
+                uncertainty_components[variable] = abs(derivative*uncert)
+        return uncertainty_components
+    
+    sys_components = systematic_uncertainty_components
     
     @property
     def statistical_standard_deviation(self):
@@ -416,7 +421,7 @@ class AffineApproximation(object):
         Resulting statistical standard deviation.
         """
         stat_std_dev = sqrt(sum(
-                d**2 for d in self.uncertainty_components("stat").values()))
+                d**2 for d in self.stat_components().values()))
         
         return stat_std_dev
     
@@ -430,7 +435,7 @@ class AffineApproximation(object):
         Resulting systematical standard deviation
         """
         sys_std_dev = sqrt(sum(
-                d**2 for d in self.uncertainty_components("sys").values()))
+                d**2 for d in self.sys_components().values()))
         
         return sys_std_dev
     
@@ -441,7 +446,6 @@ class AffineApproximation(object):
     def significant_digits(self):
         """
         Return the index of the last significant digit.
-        
         
         The convention of how many digits with the same or a smaller order of
         magnitude as the greater uncertainty are relevant is set in the
@@ -809,7 +813,7 @@ def statistical_correlation_matrix(*numbers):
     numbers -- Some uncertain values
     """
     size = len(numbers)
-    matrix = statistical_covariance_matrix(numbers, kind)
+    matrix = statistical_covariance_matrix(*numbers)
     # copy variances, as the matrix is altered
     variances = [matrix[i][i] for i in range(size)]
     for i in range(size):
@@ -831,7 +835,7 @@ def systematic_correlation_matrix(*numbers):
     numbers -- Some uncertain values
     """
     size = len(numbers)
-    matrix = systematic_covariance_matrix(numbers, kind)
+    matrix = systematic_covariance_matrix(*numbers)
     # copy variances, as the matrix is altered
     variances = [matrix[i][i] for i in range(size)]
     for i in range(size):

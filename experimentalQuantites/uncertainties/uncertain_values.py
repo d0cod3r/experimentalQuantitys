@@ -17,6 +17,7 @@ from math import sqrt, floor, log, log10
 from types import MappingProxyType
 
 
+# float("nan") is used for derivatives that could not be calculated
 NOT_DIFFERENTIALBE = float("nan")
 
 # The amount of significant digits with the same or a smaller order of 
@@ -126,6 +127,7 @@ class NegativeStandardDeviation(ValueError):
     """
     pass
 
+
 def to_affine_approximation(x):
     """
     If x is an AffineApproximation, return x.
@@ -140,7 +142,8 @@ def to_affine_approximation(x):
     raise ValueError("Can not transform other than floatlike values to a"
                      "constant AffineApproximation.")
 
-def wrap(function, derivatives=repeat(None)):
+
+def wrap(function, derivatives=None):
     # using itertools.repeat to generate numeric derivatives for any amount of
     # arguments
     """
@@ -165,6 +168,8 @@ def wrap(function, derivatives=repeat(None)):
     If the argument is a list, it must have the same length as the amount
     of arguments given to the function.
     """
+    if derivatives is None:
+        derivatives = repeat(None)
     if isinstance(derivatives, list):
         # Replace None with numeric derivative
         for (index, element) in enumerate(derivatives):
@@ -185,7 +190,7 @@ def wrap(function, derivatives=repeat(None)):
         # Search uncertain inputs
         pos_with_uncert = [index for (index, value) in enumerate(args) if
                    isinstance(value, AffineApproximation)]
-
+        
         # extract nominal values from uncertain arguments and use them to
         # calculate the nomainal result
         # must be done first, so in case of an error the exception is raised
@@ -209,6 +214,7 @@ def wrap(function, derivatives=repeat(None)):
     wrapped_function.__name__ = function.__name__
     
     return wrapped_function
+
 
 class LinearPart(object):
     """
@@ -345,6 +351,9 @@ class AffineApproximation(object):
         # make calculations faster. See LinearPart for details.
         self._linear_part = linear_part
     
+    def __hash__(self):
+        return id(self)
+    
     @property
     def nominal_value(self):
         """
@@ -416,7 +425,7 @@ class AffineApproximation(object):
     stat = statistical_standard_deviation
     
     @property
-    def systematical_standard_deviation(self):
+    def systematic_standard_deviation(self):
         """
         Resulting systematical standard deviation
         """
@@ -425,9 +434,9 @@ class AffineApproximation(object):
         
         return sys_std_dev
     
-    sys_std_dev = systematical_standard_deviation
+    sys_std_dev = systematic_standard_deviation
     
-    sys = systematical_standard_deviation
+    sys = systematic_standard_deviation
     
     def significant_digits(self):
         """
@@ -535,8 +544,8 @@ class AffineApproximation(object):
         return self * (-1) # Using __mul__
     
     def __ne__(self, other):
-        # only a difference of excactly zero, without uncertainty, is considered
-        # equal
+        # only a difference of excactly zero, without uncertainty, is
+        # considered equal
         d = self - other
         return (d.nominal_value or d.stat_std_dev or d.sys_std_dev)
     
@@ -631,9 +640,6 @@ class UncertainVariable(AffineApproximation):
         self._stat_std_dev = float(statistic_uncertainty)
         self._sys_std_dev = float(systematic_uncertainty)
     
-    def __hash__(self):
-        return id(self)
-    
     @property
     def statistical_standard_deviation(self):
         """
@@ -672,6 +678,8 @@ def nominal_value(x):
     else:
         return x
 
+nom_val = nominal_value
+
 def statistical_standard_deviation(x, default=0.0):
     """
     Return the statistical standard deviation of x if it is an uncertain
@@ -687,7 +695,9 @@ def statistical_standard_deviation(x, default=0.0):
     else:
         return default
 
-def systematical_standard_deviation(x, default=0.0):
+stat = stat_std_dev = statistical_standard_deviation
+
+def systematic_standard_deviation(x, default=0.0):
     """
     Return the systematical standard deviation of x if it is an uncertain
     value as defined in this module.
@@ -702,25 +712,19 @@ def systematical_standard_deviation(x, default=0.0):
     else:
         return default
 
-def covariance_matrix(numbers, kind="stat"):
+sys = sys_std_dev = systematic_standard_deviation
+
+
+def statistical_covariance_matrix(*numbers):
     """
-    Calculate a matrix of covariances to a vector of uncertain values.
-    The order of the matrix depends on the order of the elements in the vector,
-    covariance_matrix[i][j] is the covariance of numbers[i] and numbers[j].
+    Calculate a matrix of statistic covariances to a vector of uncertain
+    values. The order of the matrix depends on the order of the elements in
+    the vector, covariance_matrix[i][j] is the covariance of numbers[i] and
+    numbers[j].
     Returns a list of lists.
     
-    numbers -- A list of uncertain values
-    
-    kind -- Can be either "stat" (default) or "sys" to determine which
-    kind of uncertainty is looked at.
+    numbers -- Some uncertain values
     """
-    if kind=="stat":
-        uncert = lambda var: var.stat_std_dev
-    elif kind=="sys":
-        uncert = lambda var: var.sys_std_dev
-    else:
-        raise ValueError("kind has to be stat or sys")
-    
     # build the left under part of the matrix
     covariance_matrix = []
     for (i, number1) in enumerate(numbers):
@@ -732,7 +736,7 @@ def covariance_matrix(numbers, kind="stat"):
             # using dict.get to define 0 as default, as number2 may not depend
             # on var.
             matrix_line.append(sum(
-                    ((derivatives1[var]*derivatives2.get(var,0.)*uncert(var)**2)
+                    ((derivatives1[var]*derivatives2.get(var,0.)*(var.stat_std_dev)**2)
                     for var in vars1))
                     # All elements shold be floats by convention, so add .0
                      + .0)
@@ -745,21 +749,67 @@ def covariance_matrix(numbers, kind="stat"):
             covariance_matrix[i].append(covariance_matrix[j][i])
     
     return covariance_matrix
-            
-def correlation_matrix(numbers, kind="stat"):
+
+stat_cov_mat = statistical_covariance_matrix
+
+def systematic_covariance_matrix(*numbers):
     """
-    Calculate a matrix of correlations to a vector of uncertain values.
-    The order of the matrix depends on the order of the elements in the vector,
-    correlation_matrix[i][j] is the correlation of numbers[i] and numbers[j].
+    Calculate a matrix of systematic covariances to a vector of uncertain
+    values. The order of the matrix depends on the order of the elements in
+    the vector, covariance_matrix[i][j] is the covariance of numbers[i] and
+    numbers[j].
     Returns a list of lists.
     
-    numbers -- A list of uncertain values
+    numbers -- Some uncertain values
+    """
+    # build the left under part of the matrix
+    covariance_matrix = []
+    for (i, number1) in enumerate(numbers):
+        derivatives1 = number1.derivatives
+        vars1 = derivatives1.keys()
+        matrix_line = []
+        for number2 in numbers[:i+1]:
+            derivatives2 = number2.derivatives
+            # using dict.get to define 0 as default, as number2 may not depend
+            # on var.
+            matrix_line.append(sum(
+                    ((derivatives1[var]*derivatives2.get(var,0.)*(var.sys_std_dev)**2)
+                    for var in vars1))
+                    # All elements shold be floats by convention, so add .0
+                     + .0)
+        covariance_matrix.append(matrix_line)
     
-    kind -- Can be either "stat" (default) or "sys" to determine which
-    kind of uncertainty is looked at.
+    # make the matrix symmetric
+    size = len(numbers)
+    for i in range(size-1):
+        for j in range(i+1, size):
+            covariance_matrix[i].append(covariance_matrix[j][i])
+    
+    return covariance_matrix
+    
+    # make the matrix symmetric
+    size = len(numbers)
+    for i in range(size-1):
+        for j in range(i+1, size):
+            covariance_matrix[i].append(covariance_matrix[j][i])
+    
+    return covariance_matrix
+
+sys_cov_mat = systematic_covariance_matrix
+
+
+def statistical_correlation_matrix(*numbers):
+    """
+    Calculate a matrix of statistic correlations to a vector of uncertain
+    values. The order of the matrix depends on the order of the elements in
+    the vector, correlation_matrix[i][j] is the correlation of numbers[i]
+    and numbers[j].
+    Returns a list of lists.
+    
+    numbers -- Some uncertain values
     """
     size = len(numbers)
-    matrix = covariance_matrix(numbers, kind)
+    matrix = statistical_covariance_matrix(numbers, kind)
     # copy variances, as the matrix is altered
     variances = [matrix[i][i] for i in range(size)]
     for i in range(size):
@@ -767,15 +817,54 @@ def correlation_matrix(numbers, kind="stat"):
             matrix[i][j] /= sqrt(variances[i]*variances[j])
     return matrix
 
+stat_corr_mat = statistical_correlation_matrix
+
+
+def systematic_correlation_matrix(*numbers):
+    """
+    Calculate a matrix of systematic correlations to a vector of uncertain
+    values. The order of the matrix depends on the order of the elements in
+    the vector, correlation_matrix[i][j] is the correlation of numbers[i]
+    and numbers[j].
+    Returns a list of lists.
+    
+    numbers -- Some uncertain values
+    """
+    size = len(numbers)
+    matrix = systematic_covariance_matrix(numbers, kind)
+    # copy variances, as the matrix is altered
+    variances = [matrix[i][i] for i in range(size)]
+    for i in range(size):
+        for j in range(size):
+            matrix[i][j] /= sqrt(variances[i]*variances[j])
+    return matrix
+
+sys_corr_mat = systematic_correlation_matrix
+
+
 # Exported functions
-__all__ = [ "UncertainVariable",
-            "nominal_value",
-            "statistical_standard_deviation",
-            "systematical_standard_deviation",
-            "covariance_matrix",
-            "correlation_matrix"
+__all__ = [ "UncertainVariable",               # init an uncertain variable
+            "to_affine_approximation",         # wrap a float
+            "nominal_value",                   # access nominal values
+            "nom_val",
+            "statistical_standard_deviation",  # access statistical uncertainty 
+            "stat_std_dev",
+            "stat",
+            "systematic_standard_deviation",   # acces systematic uncertainty
+            "sys_std_dev",
+            "sys",
+            "statistical_covariance_matrix",   # statistical covariances
+            "stat_cov_mat",
+            "systematic_covariance_matrix",    # systematic covariances
+            "sys_cov_mat",
+            "statistical_correlation_matrix",  # statistic correlations
+            "stat_corr_mat",
+            "systematic_correlation_matrix",   # systematic correlations
+            "sys_corr_mat",
+            "wrap"                             # wrap functions
           ]
 
+# some methods depend on numpy and are only defined if its is available
 try:
     import numpy
     import numpy.matlib
@@ -844,7 +933,5 @@ else:
             values.append(AffineApproximation(n, LinearPart(linear_part)))
         
         return values
-    
-    # TODO other numpy depencies
     
     __all__.append("correlated_values")

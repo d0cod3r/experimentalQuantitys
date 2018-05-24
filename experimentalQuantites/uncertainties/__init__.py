@@ -11,6 +11,5 @@
 """
 
 # TODO more precise imports
-from .uncertain_values import *
-from .uncertain_math import *
-from .uncertain_arrays import *
+from uncertain_values import *
+from uncertain_math import *

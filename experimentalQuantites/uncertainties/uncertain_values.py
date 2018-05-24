@@ -144,8 +144,6 @@ def to_affine_approximation(x):
 
 
 def wrap(function, derivatives=None):
-    # using itertools.repeat to generate numeric derivatives for any amount of
-    # arguments
     """
     Build a wrapper around a function. The new function will accept uncertain
     values as well as other types and return an uncertain variable with the
@@ -168,8 +166,13 @@ def wrap(function, derivatives=None):
     If the argument is a list, it must have the same length as the amount
     of arguments given to the function.
     """
+    
+    # if no derivatives are given, use itertools.repeat to generate numeric
+    # derivatives for any amount of arguments
     if derivatives is None:
         derivatives = repeat(None)
+    
+    # in case of a list we do not need an IndexableIterator
     if isinstance(derivatives, list):
         # Replace None with numeric derivative
         for (index, element) in enumerate(derivatives):
@@ -350,9 +353,6 @@ class AffineApproximation(object):
         # The linear part will only be expanded if needed. This should
         # make calculations faster. See LinearPart for details.
         self._linear_part = linear_part
-    
-    def __hash__(self):
-        return id(self)
     
     @property
     def nominal_value(self):
@@ -665,6 +665,9 @@ class UncertainVariable(AffineApproximation):
     sys_std_dev = systematical_standard_deviation
     
     sys = systematical_standard_deviation
+    
+    def __hash__(self):
+        return id(self)
 
 
 def nominal_value(x):

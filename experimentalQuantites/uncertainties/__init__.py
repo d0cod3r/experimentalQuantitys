@@ -10,6 +10,10 @@
  @author: d0cod3r
 """
 
-# TODO more precise imports
-from uncertain_values import *
-from uncertain_math import *
+from .uncertain_values import *
+from .uncertain_values import __all__
+
+from .uncertain_math import *
+from .uncertain_math import __all__ as all_math
+
+__all__.extend(all_math)

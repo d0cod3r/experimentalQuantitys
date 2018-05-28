@@ -12,7 +12,7 @@
 
 # wrap a lot of math functions using wrap() from uncertain_values
 
-import uncertain_values as uv
+import uncertainties.uncertain_values as uv
 import math
 
 

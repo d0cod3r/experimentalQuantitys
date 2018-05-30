@@ -17,7 +17,9 @@ from math import sqrt, floor, log, log10
 from types import MappingProxyType
 
 
-# float("nan") is used for derivatives that could not be calculated
+# float("nan") is used for derivatives that could not be calculated.
+# I define this constant to be more obvious, but do not change, as some
+# situations need this value to work properly
 NOT_DIFFERENTIALBE = float("nan")
 
 # The amount of significant digits with the same or a smaller order of 
@@ -622,27 +624,27 @@ class UncertainVariable(AffineApproximation):
     
     __slots__ = ("_stat_std_dev", "_sys_std_dev")
     
-    def __init__(self, nominal_value, statistic_uncertainty=0,
-                 systematic_uncertainty=0):
+    def __init__(self, nominal_value, stat=0,
+                 sys=0):
         """
         Initialise an independend variable.
         
         nominal_value -- nominal value, float-like
-        statistic_uncertainc -- statistic uncertainty, float-like
-        systematic_uncertainty -- systematic uncertainty, float-like
+        stat -- statistic uncertainty, float-like
+        sys -- systematic uncertainty, float-like
         """
         # With this, calculations can be handled the same as with
         # other AffineApproximations
         linear_part = LinearPart({self: 1.})
         super().__init__(nominal_value, linear_part)
         
-        # Using not >= instead of < accepts nan as uncertainty, which is
-        # used if the uncertainty could not be calculated
-        if not (statistic_uncertainty >= 0 and systematic_uncertainty >= 0):
+        # As comparisons with nan are always False, the NOT_DIFFERENTIABLE flag
+        # does not raise an Exception
+        if (stat < 0 or sys < 0):
             raise NegativeStandardDeviation()
         
-        self._stat_std_dev = float(statistic_uncertainty)
-        self._sys_std_dev = float(systematic_uncertainty)
+        self._stat_std_dev = float(stat)
+        self._sys_std_dev = float(sys)
     
     @property
     def statistical_standard_deviation(self):
@@ -668,6 +670,8 @@ class UncertainVariable(AffineApproximation):
     
     def __hash__(self):
         return id(self)
+
+UVar = UncertainVariable
 
 
 def nominal_value(x):
@@ -851,6 +855,7 @@ sys_corr_mat = systematic_correlation_matrix
 
 # Exported functions
 __all__ = [ "UncertainVariable",               # init an uncertain variable
+            "UVar",
             "to_affine_approximation",         # wrap a float
             "nominal_value",                   # access nominal values
             "nom_val",

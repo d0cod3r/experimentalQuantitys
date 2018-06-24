@@ -16,9 +16,10 @@ class NumberDict(dict):
         return 0
     
     def __setitem__(self, key, value):
-        super(NumberDict, self).__setitem__(key, value)
-        if value == 0.:
+        if value == 0:
             del self[key]
+        else:
+            super(NumberDict, self).__setitem__(key, value)
     
     def __add__(self, other):
         """
@@ -247,7 +248,23 @@ class PhysicalQuantity:
     def __neg__(self):
         return PhysicalQuantity(- self._value, self._unit)
     
-    # TODO ne, eq, lt, le, gt, ge
+    def __eq__(self, other):
+        return (self - other).value == 0
+    
+    def __ne__(self, other):
+        return not (self == other)
+    
+    def __lt__(self, other):
+        return (self - other).value < 0
+    
+    def __le__(self, other):
+        return (self - other).value <= 0
+        
+    def __gt__(self, other):
+        return (self - other).value > 0
+        
+    def __ge__(self, other):
+        return (self - other).value >= 0
     
     def __abs__(self):
         if self >= 0:
@@ -483,7 +500,7 @@ class Unit:
             units, factor, dec_pow = rep._units, rep._factor, rep._dec_pow
             res = ""
             if factor != 1:
-                res += str(factor)
+                res += "*"+str(factor)
             if dec_pow != 0:
                 res += "*10^("+str(dec_pow)+")"
             for unit, exp in units.items():

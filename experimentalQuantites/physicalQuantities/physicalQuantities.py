@@ -50,6 +50,8 @@ class NumberDict(dict):
         for key in iter(self):
             res[key] = other * self[key]
         return res
+    
+    __rmul__ = __mul__
         
     def __neg__(self):
         res = NumberDict(self.copy())

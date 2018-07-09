@@ -122,6 +122,8 @@ degrees = uv.wrap(math.degrees,
 radians = uv.wrap(math.radians,
                   [ lambda x: rads_per_degree ])
 
+__all__.extend(["degrees", "radians"])
+
 ###############################################################################
 # hyperbolic functions
 

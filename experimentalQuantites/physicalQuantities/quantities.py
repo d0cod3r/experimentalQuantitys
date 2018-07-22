@@ -4,6 +4,10 @@ For automated handling of units.
 
 TODO doc
 
+!!! Important !!! Comparing quantities checks whether the units are compatible.
+Comparing two quantites with different dimensions will not return False but
+raise an exception.
+
 @author: d0cod3r
 """
 
@@ -18,10 +22,10 @@ class NumberDict(dict):
         return 0
     
     def __setitem__(self, key, value):
+        # putting this in else might cause a key error
+        super(NumberDict, self).__setitem__(key, value)
         if value == 0:
             del self[key]
-        else:
-            super(NumberDict, self).__setitem__(key, value)
     
     def __add__(self, other):
         """
@@ -59,7 +63,7 @@ class NumberDict(dict):
     def __rmul__(self, other):
         return self.__mul__(other)
     
-    def __div__(self, other):
+    def __truediv__(self, other):
         re = NumberDict()
         for key, val in self.items():
             re[key] = other / val
@@ -77,19 +81,24 @@ class DimensionError(ValueError):
     adding two values with different dimensions.
     """
     
-    def __init__(self, *units):
+    def __init__(self, unit1, unit2):
         """
-        Can be given one ore two units.
-        Give one unit, if this unit should be dimensionless but is not.
-        Give two units, if they should be the same dimension but are not.
+        Takes two units. Gives an error message naming both units and stating
+        that they have different dimensions, which is wrong in this context.
         """
-        if len(units)==1:
+        # As the representation of UNITONE is just an empty string, which
+        # will probably be confusing, test for this case. Testing identity
+        # will not raise an exception, different from equality.
+        if unit1 is UNITONE:
             super(DimensionError, self).__init__("Needed a dimensionless "
-                 "quantity, got unit {}".format(units[0]))
+                 "quantity, got unit {}".format(unit2))
+        elif unit2 is UNITONE:
+            super(DimensionError, self).__init__("Needed a dimensionless "
+                 "quantity, got unit {}".format(unit1))
         else:
             super(DimensionError, self).__init__("The units {} and {} do not "
                  "have the same dimension, which is necessary in this "
-                 "context.".format(units[0], units[1]))
+                 "context.".format(unit1, unit2))
 
 
 class PhysicalQuantity:
@@ -99,6 +108,8 @@ class PhysicalQuantity:
     actions with them, such as addition, multiplication and powers. The units
     will be calculated automaticly and an exceptin will be raised if there is
     a dimension error.
+    Value and unit can be accessed, the variable can be converted to another
+    unit.
     """
     
     # value must be a float like scalar, unit must be an instance of class
@@ -109,9 +120,12 @@ class PhysicalQuantity:
     def __init__(self, value, unit=1):
         """
         Must be given a value, float like.
-        Optional second argument has to be an instance of Unit or another
-        float like.
+        Second argument is the unit. It is optional, but has to be an instance
+        of class Unit.
         Creates a PhysicalQuantity representing value*unit
+        
+        (Instead of an instance of class Unit, the second argument can be a
+        float, which will be replaced by a dimensionless unit.)
         """
         self._value = value
         if not isinstance(unit, Unit):
@@ -137,24 +151,14 @@ class PhysicalQuantity:
     
     def in_unit(self, unit):
         """
-        Returns a copy of this quantity, as a value times the given unit
+        Returns a quantity representing the same content, but as a value times
+        the given unit.
         """
-        if not self._unit.is_compatible(unit):
-            raise DimensionError(self._unit, unit)
         value = self._value * self._unit.conversion_factor(unit)
         res = PhysicalQuantity(value, unit)
         return res
     
     # TODO in_base_units
-    
-    def make_unit(self):
-        """
-        Let this quantity define a new unit. Returns the new unit as instance
-        of the class Unit
-        """
-        # TODO extract decimal power from self._value
-        unit = Unit(Representation(NumberDict({self._unit: 1}), self._value))
-        return unit
     
     # Multiplication and division are overwritten in class Unit, so that for
     # an operation on two Units is again a Unit. Thus, the second argument to
@@ -239,7 +243,7 @@ class PhysicalQuantity:
         if isinstance(other, PhysicalQuantity):
             return PhysicalQuantity(other._value**exp, other._unit**exp)
         else:
-            return PhysicalQuantity(other**exp, 1)
+            return PhysicalQuantity(other**exp, UNITONE)
     
     def __pos__(self):
         return self
@@ -248,11 +252,14 @@ class PhysicalQuantity:
         return PhysicalQuantity(- self._value, self._unit)
     
     def __eq__(self, other):
+        # __sub__ checks the units, so an exception is raised for non
+        # compatible units.
         return (self - other).value == 0
     
     def __ne__(self, other):
         return not (self == other)
     
+    # TODO all units are assumed >0, should better be only base units
     def __lt__(self, other):
         return (self - other).value < 0
     
@@ -266,7 +273,7 @@ class PhysicalQuantity:
         return (self - other).value >= 0
     
     def __abs__(self):
-        if self >= 0:
+        if self._value >= 0:
             return +self
         else:
             return -self
@@ -274,7 +281,9 @@ class PhysicalQuantity:
     # TODO round, floor, ceil
     
     def __bool__(self):
-        return self != 0 # using __ne__
+        # assume all units != 0, other cases are possible, but do not make
+        # sense
+        return self._value != 0
     
     # TODO format, str
     
@@ -284,11 +293,11 @@ class PhysicalQuantity:
 
 class Representation:
     
-    __slots__ = ["_units", "_factor", "_dec_pow"]
-    
     # To express a unit throught other units. Such a relation is a product of
     # other units, handled as a NumberDict, together with a factor and a
     # decimal power. Should not change at all.
+    
+    __slots__ = ["_units", "_factor", "_dec_pow"]
     
     def __init__(self, units, factor=1, dec_pow=0):
         """
@@ -347,15 +356,15 @@ class Representation:
 
 class Unit( PhysicalQuantity ):
     """
-    A unit is eqivalent to a quantity with value 1 and that unit. Therefor, in
-    this skript, a unit is always also a quantity.
+    A unit is eqivalent to a quantity with value 1 and that unit as unit.
+    Therefor, in this skript, a unit is always also a quantity.
     Apart from this, a unit is generally a predefined quantity for comparison.
     This can be defined by other units or in a more complex way. In this
     skript, a unit can have a name or a representation through other units, or
     both.
     A unit with only a name defines a new dimension.
     Units with only representations are created by mathematic operations on
-    units. If needed, name will be calculated from the representation.
+    units. If needed, a name will be calculated from the representation.
     Multiplying with and dividing throught another unit forms a new unit, as
     well as raising to a power.
     Every operation will return a PhysicalQuantity.
@@ -402,6 +411,7 @@ class Unit( PhysicalQuantity ):
     def set_name(self, name):
         """
         Give this unit an own name.
+        Returns self.
         """
         self._name = name
         return self
@@ -415,8 +425,8 @@ class Unit( PhysicalQuantity ):
     
     def is_base(self):
         """
-        Returns whether is Unit is a base unit, wheter it has no representation
-        throught other units.
+        Returns whether this Unit is a base unit, whether it has no
+        representation throught other units.
         """
         return self._repr is None
     
@@ -452,9 +462,6 @@ class Unit( PhysicalQuantity ):
         if (repres.in_base_units()._units):
             raise DimensionError(self, other)
         return repres._factor * 10**(repres._dec_pow)
-    
-    def make_unit(self):
-        return self
     
     # If two units are multiplied or divided or a unit is raised to a power,
     # the result must be a unit again. These methods overwrite those from
@@ -516,9 +523,26 @@ class Unit( PhysicalQuantity ):
                 res += unit._name+"^"+str(abs(exp))
             return res
 
+
 # This constant is used whenever contentual a simple 1 is needed, but for the
 # skript it needs to be an instance of Unit.
 UNITONE = Unit(Representation(NumberDict()), "")
+
+
+def make_unit(quantity, name=None):
+    """
+    Let the given quantity define a new unit. Returns the new unit as instance
+    of the class Unit.
+    Optional, as a second argument, a name can be given. Has to be a string.
+    """
+    if isinstance(quantity, Unit):
+        return quantity
+    # TODO extract decimal power from self._value
+    unit = Unit(Representation(NumberDict({quantity._unit: 1}),
+                               quantity._value))
+    if name is not None:
+        unit.set_name(name)
+    return unit
 
 
 

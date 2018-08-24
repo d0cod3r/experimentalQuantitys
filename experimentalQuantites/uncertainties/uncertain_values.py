@@ -1,13 +1,29 @@
 # -*- coding: utf-8 -*-
 
 """
- TODO documentation
+ See the init file for explanations.
+ 
+ This file covers the basis: The classes AffineApproximation and
+ UncertainVariable, the methods to access their data, as well as the wrap
+ method .
  
  @author: d0cod3r
 """
 
 
-# TODO how it works
+# The idea of this module is to describe uncertain varaibles as affine
+# functions in the independent variables. This conforms gaussian error
+# propagation.
+# Such a function is defined by its offset and the derivatives to each
+# argument. The class handeling this is AffineApproximation, where the
+# derivatives are stored in a LinearPart. Calculations can pe performed by
+# creating new affine functions, where the new derivations can be calculated
+# from the derivations of the arguments and the type of calculation. Thereby,
+# the correalations are considered.
+#
+# If the derivative of an operation is not definded, the calculation can still
+# be correct if the uncertainty is 0. To handle this, nan is allowed as a
+# derivative and will only raise an error if the uncertainty is not 0.
 
 from numbers import Number
 from sys import float_info
@@ -624,8 +640,7 @@ class UncertainVariable(AffineApproximation):
     
     __slots__ = ("_stat_std_dev", "_sys_std_dev")
     
-    def __init__(self, nominal_value, stat=0,
-                 sys=0):
+    def __init__(self, nominal_value, stat=0, sys=0):
         """
         Initialise an independend variable.
         

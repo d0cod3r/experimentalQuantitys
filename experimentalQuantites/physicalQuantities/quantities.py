@@ -2,14 +2,25 @@
 """
 For automated handling of units.
 
-TODO doc
-
-!!! Important !!! Comparing quantities checks whether the units are compatible.
-Comparing two quantites with different dimensions will not return False but
-raise an exception.
+See init file for explanations.
 
 @author: d0cod3r
 """
+
+# Values with units are represented by the class PhysicalQuantity, which
+# consists of a float-like value and a unit, which has to be an instance of
+# class Unit. Calculations here a pretty much straight forward.
+# A unit can have a name and / or a representation through other units. A unit
+# without a representation is considered a base unit and must have a name.
+# Each base unit introduces a dimension.
+# Calculations with units can be performed by building new units with according
+# representations through the arguments units or by converting units into
+# other using their representation.
+# A representation consists of a float-like factor and other units with their
+# poweres, which are stored in a dict optimized for numeric values.
+
+
+from math import floor, ceil
 
 class NumberDict(dict):
     """
@@ -131,7 +142,7 @@ class PhysicalQuantity:
         if not isinstance(unit, Unit):
             # if the unit is just a number, represent it by a dimensionless
             # unit
-            unit = unit * UNITONE
+            unit = Unit(Representation(NumberDict(), unit))
         self._unit = unit
     
     @property
@@ -155,10 +166,18 @@ class PhysicalQuantity:
         the given unit.
         """
         value = self._value * self._unit.conversion_factor(unit)
-        res = PhysicalQuantity(value, unit)
-        return res
+        return PhysicalQuantity(value, unit)
     
-    # TODO in_base_units
+    def in_base_units(self):
+        """
+        Returns a quantity representing the same content, but as a unit
+        directly composed from base units.
+        """
+        repres = self._unit.get_base_unit_representation()
+        # We want the new unit without a factor, so just set it to one. As this
+        # only alters the unit, in_unit will still work correctly.
+        repres._factor = 1
+        return self.in_unit(Unit(repres))
     
     # Multiplication and division are overwritten in class Unit, so that for
     # an operation on two Units is again a Unit. Thus, the second argument to
@@ -278,12 +297,22 @@ class PhysicalQuantity:
         else:
             return -self
     
-    # TODO round, floor, ceil
+    def __round__(self, ndigits=0):
+        return PhysicalQuantity(round(self._value, ndigits), self._unit)
     
+    def __floor__(self):
+        return PhysicalQuantity(floor(self._value), self._unit)
+    
+    def __ceil__(self):
+        return PhysicalQuantity(ceil(self._value), self._unit)
+        
     def __bool__(self):
         # assume all units != 0, other cases are possible, but do not make
         # sense
         return self._value != 0
+    
+    def __float__(self):
+        return self.in_unit(UNITONE)._value
     
     # TODO format, str
     
@@ -354,6 +383,68 @@ class Representation:
         return Representation(reduced_units, factor, dec_pow)
 
 
+# A unit should have a name, a short symbol, sometimes a different latex
+# representation and sometimes a documentation. Sometimes all of them are
+# given, sometimes defaults are used.
+
+class FullName:
+    """
+    Store a name, a (one or two charakter) symbol, latex representation and
+    a documentation for a unit.
+    """
+    
+    __slots__ = ["_name", "_symbol", "_latex", "_doc"]
+    
+    def __init__(self, name, symbol, latex, doc=""):
+        self._name = name
+        self._symbol = symbol
+        self._latex = latex
+        self._doc = doc
+    
+    @property
+    def name(self):
+        return self._name
+    
+    @property
+    def symbol(self):
+        return self._symbol
+    
+    @property
+    def latex(self):
+        return self._latex
+    
+    @property
+    def doc(self):
+        return self._doc
+
+
+class SimpleName:
+    """
+    Stores only symbol and uses it in every context.
+    """
+    
+    __slots__ = [ "_symbol"]
+    
+    def __init__(self, symbol):
+        self._symbol = symbol
+    
+    @property
+    def name(self):
+        return self._symbol
+    
+    @property
+    def symbol(self):
+        return self._symbol
+    
+    @property
+    def latex(self):
+        return self._symbol
+    
+    @property
+    def doc(self):
+        return "%s (no documentation available)" % self._symbol
+
+
 class Unit( PhysicalQuantity ):
     """
     A unit is eqivalent to a quantity with value 1 and that unit as unit.
@@ -380,25 +471,10 @@ class Unit( PhysicalQuantity ):
     # The representation can be None, for the used base units that are the
     # used base units. Otherwise it must be an instance of Representation.
     
-    def __init__(self, *args):
-        """
-        Can be given a name and / or a representation
-        """
+    def __init__(self, representation=None, name=None):
         super(Unit, self).__init__(1, self)
-        if len(args) == 1:
-            if isinstance(args[0], str):
-                self._name = args[0]
-                self._repr = None
-            elif isinstance(args[0], Representation):
-                self._name = None
-                self._repr = args[0]
-        else:
-            if isinstance(args[0], str):
-                self._name = args[0]
-                self._repr = args[1]
-            elif isinstance(args[0], Representation):
-                self._name = args[1]
-                self._repr = args[0]
+        self._repr = representation
+        self._name = name
     
     def __hash__(self):
         """
@@ -408,6 +484,7 @@ class Unit( PhysicalQuantity ):
         """
         return id(self)
     
+    # TODO better getter and setter, as name is now a class
     def set_name(self, name):
         """
         Give this unit an own name.
@@ -440,11 +517,16 @@ class Unit( PhysicalQuantity ):
         else:
             return Representation(NumberDict({self: 1}))
     
+    def get_base_unit_representation(self):
+        """
+        Returns a representation of this unit that contains only base units.
+        """
+        return self.get_representation().in_base_units()
+    
     def is_compatible(self, other):
         """
         Returns whether this unit and another are compatible, whether they
-        have the same dimension. Other can be a scalar to test if the unit is
-        dimensionless.
+        have the same dimension.
         """
         try:
             self.conversion_factor(other)
@@ -459,7 +541,7 @@ class Unit( PhysicalQuantity ):
         Raises a DimensionError if the units are not compatible.
         """
         repres = (self / other)._repr.in_base_units()
-        if (repres.in_base_units()._units):
+        if (repres._units):
             raise DimensionError(self, other)
         return repres._factor * 10**(repres._dec_pow)
     
@@ -506,7 +588,7 @@ class Unit( PhysicalQuantity ):
     
     def __repr__(self):
         if self._name:
-            return self._name
+            return self._name.symbol
         else: # TODO better
             rep = self._repr
             units, factor, dec_pow = rep._units, rep._factor, rep._dec_pow
@@ -520,46 +602,150 @@ class Unit( PhysicalQuantity ):
                     res += "*"
                 else:
                     res += "/"
-                res += unit._name+"^"+str(abs(exp))
+                res += unit._name.symbol
+                if exp != 1:
+                    res += "^"+str(abs(exp))
             return res
 
 
 # This constant is used whenever contentual a simple 1 is needed, but for the
 # skript it needs to be an instance of Unit.
-UNITONE = Unit(Representation(NumberDict()), "")
+UNITONE = Unit(Representation(NumberDict()), None)
 
 
-def make_unit(quantity, name=None):
+def to_quantity(x):
     """
-    Let the given quantity define a new unit. Returns the new unit as instance
-    of the class Unit.
-    Optional, as a second argument, a name can be given. Has to be a string.
+    Returns x if x is a physical quantity. Returns a pyhsical quantity with
+    value x and a dimensionless unit otherwise.
     """
-    if isinstance(quantity, Unit):
-        return quantity
-    # TODO extract decimal power from self._value
-    unit = Unit(Representation(NumberDict({quantity._unit: 1}),
-                               quantity._value))
-    if name is not None:
-        unit.set_name(name)
-    return unit
+    if isinstance(x, PhysicalQuantity):
+        return x
+    else:
+        return PhysicalQuantity(x, UNITONE)
+
+def in_unit(x, unit):
+    """
+    Returns x as a physical quantity with given unit.
+    Other than x.in_unit(unit), this works also if x is a float-like and unit
+    is dimensionless.
+    This does not work for a float and a not dimensionless unit, it is not
+    x*unit, but rather x converted to unit.
+    """
+    if isinstance(x, PhysicalQuantity):
+        return x.in_unit(unit)
+    else:
+        return x / unit.conversion_factor(UNITONE) * unit
+
+def is_compatible(x, y):
+    """
+    Returns whether the two quantites are compatible, whether they have the
+    same dimension. Both can be a scalars, in which case this method will
+    return true if the other unit is dimensionless.
+    """
+    if isinstance(x, PhysicalQuantity) and isinstance(y, PhysicalQuantity):
+        return x._unit.is_compatible(y)
+    elif isinstance(x, PhysicalQuantity):
+        return x._unit.is_compatible(UNITONE)
+    elif isinstance(y, PhysicalQuantity):
+        return y._unit.is_compatible(UNITONE)
+    else:
+        return True
 
 
-
-#==============================================================================
-# DEBUGGING
-#==============================================================================
-
-m = Unit("m")
-s = Unit("s")
-kg = Unit("kg")
-
-N = kg*m/s**2
-N.set_name("N")
-
-g = 9.81 *N/kg
-t = 2*s
-l = g*t**2
+def userUnit(*args, **kwargs):
+    """
+    Create a new unit. Can be given a quantity, a name, a symbol, latex code
+    and documentation or parts of that.
+    If given without keywords, please use the order as above.
+    If using keyword arguments, please use name, symbol, latex and doc as
+    keywords and give the quantity as first, nameless argument.
+    """
+    quantity, name, symbol, latex, doc = None, None, None, None, ""
+    if len(args) > 0 and isinstance(args[0], PhysicalQuantity):
+        quantity = args[0]
+        args = args[1:]
+    if len(args) > 0:
+        symbol = args[0]
+    if len(args) > 1:
+        name = args[1]
+        if len(symbol) > len(name):
+            name, symbol = symbol, name
+    if len(args) > 2:
+        latex = args[2]
+    if len(args) > 3:
+        doc = args[3]
+    if "name" in kwargs.keys():
+        name = kwargs["name"]
+    if "symbol" in kwargs.keys():
+        symbol = kwargs["symbol"]
+    if "latex" in kwargs.keys():
+        latex = kwargs["latex"]
+    if "doc" in kwargs.keys():
+        doc = kwargs["doc"]
     
+    repres, uname = None, None
+    if quantity is not None:
+        repres = Representation(NumberDict({quantity._unit: 1}),
+                                quantity._value)
+    if name and symbol:
+        if latex is None:
+            latex = symbol
+        uname = FullName(name, symbol, latex, doc)
+    elif symbol:
+        uname = SimpleName(symbol)
+    elif not (name or symbol or latex):
+        uname = None
+    else:
+        # TODO every possibility
+        raise NotImplementedError("Sorry, I haven't implementet everything "
+                                  "here. Try giving more detail.")
+    return Unit(repres, uname)
 
+
+def wrap(function, result_unit, arg_units, kw_arg_units={}):
+    """
+    Wraps a function to support quantities as arguments.
+    First argument is the function to wrap.
+    Second argument is the unit of the result. Can be None if the result
+    should not be converted, i.e. when its a boolean.
+    Third argument is a list of units that are expected for the arguments to
+    the given function. Must be the same length as arguments can be given.
+    If an argument is not expected to be a quantity, give None. If it is
+    expected to be dimensionless (or a just a float or int), give UNITONE.
+    Compatible units will be converted.
+    Optional third argument can be a dict mapping keywords to units that are
+    expected for arguments to the given function with that keyword.
+    """
+    
+    indices_with_units = [index for (index, unit) in enumerate(arg_units) if
+                                                         unit is not None]
+    keys_with_units = kw_arg_units.keys()
+    
+    def wrapped_function(*args, **kwargs):
+        """
+        A wrapped version of %s to hadle arguments with units and return a
+        value with a unit.
+        
+        Original documentation:
+        %s
+        """ % (function.__name__, function.__doc__)
+        
+        bare_args = list(args)
+        for i in indices_with_units:
+            bare_args[i] = in_unit(args[i], arg_units[i])._value
+        
+        for kw, kw_arg in kwargs.items():
+            if kw in keys_with_units:
+                kwargs[kw] = in_unit(kw_arg, kw_arg_units[kw])._value
+        
+        res = function(*bare_args, **kwargs)
+        
+        if result_unit is not None:
+            res = PhysicalQuantity(res, result_unit)
+        
+        return res
+    
+    wrapped_function.__name__ = function.__name__
+    
+    return wrapped_function
 

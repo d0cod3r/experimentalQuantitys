@@ -335,13 +335,28 @@ class Representation:
         The product needs to be given as a NumberDict mapping from factors
         (other units) to their exponents. The dict will be altered!
         """
-        # save factor and decimal power
+        self._units = units
         self._factor = factor
         self._dec_pow = dec_pow
+    
+    def copy(self):
+        """
+        Returns a copy. A new NumberDict for the units will be created, as it
+        is altered in some methods.
+        """
+        return Representation(self._units.copy(), self._factor, self._dec_pow)
+    
+    def reduce_to_named(self):
+        """
+        Reduces the representation to units that are named. Units in this
+        representation that are not named are taken apart by using their
+        representations.
+        Returns self.
+        """
         reduced_units = NumberDict()
-        while units:
+        while self._units:
             # take one factor off the stack
-            unit, exp = units.popitem()
+            unit, exp = self._units.popitem()
             if unit.is_named():
                 # add named units to the reduced form
                 reduced_units[unit] += exp
@@ -349,38 +364,39 @@ class Representation:
                 # units without name are taken apart
                 repres = unit.get_representation()
                 # Note: *exp creates a copy, which is allowed to be changed
-                units += repres._units * exp
+                self._units += repres._units * exp
                 self._factor *= repres._factor**exp
                 self._dec_pow += repres._dec_pow * exp
         self._units = reduced_units
+        return self
     
-    def in_base_units(self):
+    def reduce_to_base(self):
         """
-        Returns a reduced representation that only links to base units (units
-        that do not have a representation through other units).
+        Reduces the representation to base units (units that do not have a
+        representation through other units). Units in this representation that
+        are not base units are taken apart by using their representations.
+        Returns self.
         """
         # If two quantities with the same unit are added, this method will be
         # called with an empty self._units. As this is normally the only case
         # that occours in large numbers, optimize:
         if not self._units:
             return self
-        factor = self._factor
-        dec_pow = self._dec_pow
-        unit_stack = self._units.copy()
         reduced_units = NumberDict()
-        while unit_stack:
+        while self._units:
             # take one factor off the stack
-            unit, exp = unit_stack.popitem()
+            unit, exp = self._units.popitem()
             if unit.is_base():
                 # add base units to the reduced form
                 reduced_units[unit] += exp
             else:
                 # other units are taken apart
                 repres = unit.get_representation()
-                unit_stack += repres._units * exp
-                factor *= repres._factor**exp
-                dec_pow += repres._dec_pow * exp
-        return Representation(reduced_units, factor, dec_pow)
+                self._units += repres._units * exp
+                self._factor *= repres._factor**exp
+                self._dec_pow += repres._dec_pow * exp
+        self._units = reduced_units
+        return self
 
 
 # A unit should have a name, a short symbol, sometimes a different latex
@@ -521,7 +537,7 @@ class Unit( PhysicalQuantity ):
         """
         Returns a representation of this unit that contains only base units.
         """
-        return self.get_representation().in_base_units()
+        return self.get_representation().copy().reduce_to_base()
     
     def is_compatible(self, other):
         """
@@ -540,7 +556,7 @@ class Unit( PhysicalQuantity ):
         so that self = factor * other.
         Raises a DimensionError if the units are not compatible.
         """
-        repres = (self / other)._repr.in_base_units()
+        repres = (self / other)._repr.reduce_to_base()
         if (repres._units):
             raise DimensionError(self, other)
         return repres._factor * 10**(repres._dec_pow)
@@ -590,7 +606,7 @@ class Unit( PhysicalQuantity ):
         if self._name:
             return self._name.symbol
         else: # TODO better
-            rep = self._repr
+            rep = self._repr.reduce_to_named()
             units, factor, dec_pow = rep._units, rep._factor, rep._dec_pow
             res = ""
             if factor != 1:
